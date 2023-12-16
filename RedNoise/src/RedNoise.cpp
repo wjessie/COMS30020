@@ -95,7 +95,7 @@ void drawTwoDimensionalColour(DrawingWindow &window) {
 void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour colour) {
 	float xDiff = to.x - from.x;
 	float yDiff = to.y - from.y;
-	float numberOfSteps = fmax(abs(xDiff), abs(yDiff));
+	float numberOfSteps = std::max(abs(xDiff), abs(yDiff));
 	float xStepSize = xDiff / numberOfSteps;
 	float yStepSize = yDiff / numberOfSteps;
 	for (float i = 0.0; i <= numberOfSteps; i++) {
@@ -127,7 +127,7 @@ std::vector<CanvasPoint> interpolateVertices(CanvasPoint from, CanvasPoint to) {
 	return interpolatedPoints;
 }
 
-void drawFilledFlatBottomTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, Colour colour) {
+void fillFlatBottomTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, Colour colour) {
 	std::vector<CanvasPoint> topToLeft = interpolateVertices(triangleVertices[0], triangleVertices[1]);
 	std::vector<CanvasPoint> topToRight = interpolateVertices(triangleVertices[0], triangleVertices[2]);
 	for (int y = triangleVertices[0].y; y <= triangleVertices[2].y; y++) {
@@ -147,7 +147,7 @@ void drawFilledFlatBottomTriangle(DrawingWindow &window, CanvasTriangle triangle
 	}
 }
 
-void drawFilledFlatTopTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, Colour colour) {
+void fillFlatTopTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, Colour colour) {
 	std::vector<CanvasPoint> leftToBottom = interpolateVertices(triangleVertices[0], triangleVertices[2]);
 	std::vector<CanvasPoint> rightToBottom = interpolateVertices(triangleVertices[1], triangleVertices[2]);
 	for (int y = triangleVertices[0].y; y <= triangleVertices[2].y; y++) {
@@ -167,6 +167,18 @@ void drawFilledFlatTopTriangle(DrawingWindow &window, CanvasTriangle triangleVer
 	}
 }
 
+CanvasPoint calculateExtraMiddlePoint(CanvasTriangle triangleVertices) {
+	// Calculate the x-coordinate of the extra point for dividing the triangle
+	// The y-coordinate is the same as the y-coordinate of the middle vertex
+	float xDiffBottomTop = triangleVertices[2].x - triangleVertices[0].x;
+	float yDiffBottomTop = triangleVertices[2].y - triangleVertices[0].y;
+	float yDiffMiddleTop = triangleVertices[1].y - triangleVertices[0].y;
+	float xDiffMiddleTop = round((xDiffBottomTop * yDiffMiddleTop) / yDiffBottomTop);
+	float extraX = triangleVertices[0].x + xDiffMiddleTop;
+	CanvasPoint extraMiddlePoint(extraX, triangleVertices[1].y);
+	return extraMiddlePoint;
+}
+
 void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, Colour colour) {
 	// Sort the vertices by vertical position, top to bottom (y-coordinates)
 	if (triangleVertices[0].y > triangleVertices[1].y) std::swap(triangleVertices[0], triangleVertices[1]);
@@ -176,72 +188,35 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, 
 	if (triangleVertices[1].y == triangleVertices[2].y) {
 		// For filling flat-bottom triangles, top to bottom and left to right, no need to divide into 2 triangles
 		// There is only a top vertex, left bottom vertex, and right bottom vertex
-		drawFilledFlatBottomTriangle(window, triangleVertices, colour);
+		fillFlatBottomTriangle(window, triangleVertices, colour);
 	}
 	else if (triangleVertices[0].y == triangleVertices[1].y) {
 		// For filling flat-top triangles, top to bottom and left to right, no need to divide into 2 triangles
 		// There is only a left top vertex, right top vertex, and bottom vertex 
-		drawFilledFlatTopTriangle(window, triangleVertices, colour);
+		fillFlatTopTriangle(window, triangleVertices, colour);
 	}
 	else {
-		// Calculate the x-coordinate of the extra point for dividing the triangle
-		// The y-coordinate is the same as the y-coordinate of the middle vertex
-		float xDiffBottomTop = triangleVertices[2].x - triangleVertices[0].x;
-		float yDiffBottomTop = triangleVertices[2].y - triangleVertices[0].y;
-		float yDiffMiddleTop = triangleVertices[1].y - triangleVertices[0].y;
-		float xDiffMiddleTop = round((xDiffBottomTop * yDiffMiddleTop) / yDiffBottomTop);
-		float extraX = triangleVertices[0].x + xDiffMiddleTop;
-		CanvasPoint leftMiddlePoint(extraX, triangleVertices[1].y);
+		// For filling triangles that require a middle divide
+		CanvasPoint leftMiddlePoint = calculateExtraMiddlePoint(triangleVertices);
 
 		// Determine which middle point is left and which is right
 		CanvasPoint rightMiddlePoint = triangleVertices[1];
-		if (extraX > triangleVertices[1].x) std::swap(leftMiddlePoint, rightMiddlePoint);
-		drawLine(window, leftMiddlePoint, rightMiddlePoint, Colour(0, 255, 0));
+		if (leftMiddlePoint.x > rightMiddlePoint.x) std::swap(leftMiddlePoint, rightMiddlePoint);
 
 		// Fill top triangle, from top to bottom and left to right
-		std::vector<CanvasPoint> topToLeftSide = interpolateVertices(triangleVertices[0], leftMiddlePoint);
-		std::vector<CanvasPoint> topToRightSide = interpolateVertices(triangleVertices[0], rightMiddlePoint);
-		for (int y = triangleVertices[0].y; y <= triangleVertices[1].y; y++) {
-			int xLeft = INT16_MAX;
-			int xRight = INT16_MIN;
-			for (int i = 0; i < topToLeftSide.size(); i++) {
-				if (topToLeftSide[i].y == y && topToLeftSide[i].x < xLeft) {
-					xLeft = topToLeftSide[i].x;
-				}
-			}
-			for (int i = 0; i < topToRightSide.size(); i++) {
-				if (topToRightSide[i].y == y && topToRightSide[i].x > xRight) {
-					xRight = topToRightSide[i].x;
-				}
-			}
-			drawLine(window, CanvasPoint(xLeft, y), CanvasPoint(xRight, y), colour);
-		}
+		CanvasTriangle dividedTopVertices(triangleVertices[0], leftMiddlePoint, rightMiddlePoint);
+		fillFlatBottomTriangle(window, dividedTopVertices, colour);
 
 		// Fill bottom triangle, from top to bottom and left to right
-		std::vector<CanvasPoint> leftToBottomSide = interpolateVertices(leftMiddlePoint, triangleVertices[2]);
-		std::vector<CanvasPoint> rightToBottomSide = interpolateVertices(rightMiddlePoint, triangleVertices[2]);
-		for (int y = leftMiddlePoint.y; y <= triangleVertices[2].y; y++) {
-			int xLeft = INT16_MAX;
-			int xRight = INT16_MIN;
-			for (int i = 0; i < leftToBottomSide.size(); i++) {
-				if (leftToBottomSide[i].y == y && leftToBottomSide[i].x < xLeft) {
-					xLeft = leftToBottomSide[i].x;
-				}
-			}
-			for (int i = 0; i < rightToBottomSide.size(); i++) {
-				if (rightToBottomSide[i].y == y && rightToBottomSide[i].x > xRight) {
-					xRight = rightToBottomSide[i].x;
-				}
-			}
-			drawLine(window, CanvasPoint(xLeft, y), CanvasPoint(xRight, y), colour);
-		}
+		CanvasTriangle dividedBottomVertices(leftMiddlePoint, rightMiddlePoint, triangleVertices[2]);
+		fillFlatTopTriangle(window, dividedBottomVertices, colour);
 	}
 
 	// Draw a white stroked triangle over the top of the filled triangle
 	drawStrokedTriangle(window, triangleVertices, Colour(255, 255, 255));
 }
 
-std::vector<std::vector<uint32_t>> repositionPixels(TextureMap textureMap) {
+std::vector<std::vector<uint32_t>> repositionTextureMapPixels(TextureMap textureMap) {
 	// 2D vector is indexed by [row][column], which is opposite of coordinates (x, y)
 	// Thus, row corresponds with y and column corresponds with x
 	std::vector<std::vector<uint32_t>> reconstructedPixels(textureMap.height, std::vector<uint32_t>(textureMap.width));
@@ -254,19 +229,133 @@ std::vector<std::vector<uint32_t>> repositionPixels(TextureMap textureMap) {
 	return reconstructedPixels;
 }
 
-void loadTextureMap(DrawingWindow &window, CanvasTriangle canvasPoints, TextureMap textureMap) {
-	std::vector<std::vector<uint32_t>> imagePixels = repositionPixels(textureMap);
-
-	// // testing
-	// for (int y = 0; y < window.height; y++) {
-	// 	for (int x = 0; x < window.width; x++) {
-	// 		uint32_t colour = imagePixels[y][x];
-	// 		window.setPixelColour(x, y, colour);
-	// 	}
-	// }
-
+TexturePoint interpolateTexturePoint(CanvasPoint canvasStart, CanvasPoint canvasEnd, CanvasPoint canvasSpecificPoint) {
+	float tX = (canvasSpecificPoint.x - canvasStart.x) / (canvasEnd.x - canvasStart.x);
+	int texturePointX = round(canvasStart.texturePoint.x + (
+		(canvasEnd.texturePoint.x - canvasStart.texturePoint.x) * tX));
+	float tY = (canvasSpecificPoint.y - canvasStart.y) / (canvasEnd.y - canvasStart.y);
+	int texturePointY = round(canvasStart.texturePoint.y + (
+		(canvasEnd.texturePoint.y - canvasStart.texturePoint.y) * tY));
 	
+	TexturePoint textureSpecificPoint(texturePointX, texturePointY);
+	return textureSpecificPoint;
+}
 
+void drawTextureMappedLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, std::vector<std::vector<uint32_t>> textureMapPixels) {
+	// Interpolate between rake start and rake end to find texture point for each pixel
+	float canvasRowLength = sqrt(pow(to.x - from.x, 2) + pow(to.y - from.y, 2));
+	float canvasXDiff = to.x - from.x;
+	float canvasYDiff = to.y - from.y;
+	float textureMapXDiff = to.texturePoint.x - from.texturePoint.x;
+	float textureMapYDiff = to.texturePoint.y - from.texturePoint.y;
+	for(float t = 0.0; t <= 1.0; t += 1.0 / canvasRowLength) {
+		int canvasX = round(from.x + (t * canvasXDiff));
+		int canvasY = round(from.y + (t * canvasYDiff));
+		int textureMapX = round(from.texturePoint.x + (t * textureMapXDiff));
+		int textureMapY = round(from.texturePoint.y + (t * textureMapYDiff));
+		uint32_t colour = textureMapPixels[textureMapY][textureMapX];
+		window.setPixelColour(canvasX, canvasY, colour);
+	}
+}
+
+void textureMapFlatBottomTriangle(DrawingWindow &window, CanvasTriangle canvasVertices,
+									std::vector<std::vector<uint32_t>> textureMapPixels) {
+	std::vector<CanvasPoint> topToLeft = interpolateVertices(canvasVertices[0], canvasVertices[1]);
+	std::vector<CanvasPoint> topToRight = interpolateVertices(canvasVertices[0], canvasVertices[2]);
+	for (int y = canvasVertices[0].y; y <= canvasVertices[2].y; y++) {
+		int xLeft = INT16_MAX;
+		int xRight = INT16_MIN;
+		for (int i = 0; i < topToLeft.size(); i++) {
+			if (topToLeft[i].y == y && topToLeft[i].x < xLeft) {
+				xLeft = topToLeft[i].x;
+			}
+		}
+		for (int i = 0; i < topToRight.size(); i++) {
+			if (topToRight[i].y == y && topToRight[i].x > xRight) {
+				xRight = topToRight[i].x;
+			}
+		}
+
+		// New canvas points must also be linked to a texture point
+		CanvasPoint from(xLeft, y);
+		from.texturePoint = interpolateTexturePoint(canvasVertices[0], canvasVertices[1], from);
+		CanvasPoint to(xRight, y);
+		to.texturePoint = interpolateTexturePoint(canvasVertices[0], canvasVertices[2], to);
+		drawTextureMappedLine(window, from, to, textureMapPixels);
+	}
+}
+
+void textureMapFlatTopTriangle(DrawingWindow &window, CanvasTriangle canvasVertices,
+								std::vector<std::vector<uint32_t>> textureMapPixels) {
+	std::vector<CanvasPoint> leftToBottom = interpolateVertices(canvasVertices[0], canvasVertices[2]);
+	std::vector<CanvasPoint> rightToBottom = interpolateVertices(canvasVertices[1], canvasVertices[2]);
+	for (int y = canvasVertices[0].y; y <= canvasVertices[2].y; y++) {
+		int xLeft = INT16_MAX;
+		int xRight = INT16_MIN;
+		for (int i = 0; i < leftToBottom.size(); i++) {
+			if (leftToBottom[i].y == y && leftToBottom[i].x < xLeft) {
+				xLeft = leftToBottom[i].x;
+			}
+		}
+		for (int i = 0; i < rightToBottom.size(); i++) {
+			if (rightToBottom[i].y == y && rightToBottom[i].x > xRight) {
+				xRight = rightToBottom[i].x;
+			}
+		}
+
+		// New canvas points must also be linked to a texture point
+		CanvasPoint from(xLeft, y);
+		from.texturePoint = interpolateTexturePoint(canvasVertices[0], canvasVertices[2], from);
+		CanvasPoint to(xRight, y);
+		to.texturePoint = interpolateTexturePoint(canvasVertices[1], canvasVertices[2], to);
+		drawTextureMappedLine(window, from, to, textureMapPixels);
+	}
+}
+
+void loadTextureMap(DrawingWindow &window, CanvasTriangle canvasVertices, TextureMap textureMap) {
+	std::vector<std::vector<uint32_t>> imagePixels = repositionTextureMapPixels(textureMap);
+
+	// Sort the vertices by vertical position, top to bottom (y-coordinates)
+	if (canvasVertices[0].y > canvasVertices[1].y) std::swap(canvasVertices[0], canvasVertices[1]);
+	if (canvasVertices[0].y > canvasVertices[2].y) std::swap(canvasVertices[0], canvasVertices[2]);
+	if (canvasVertices[1].y > canvasVertices[2].y) std::swap(canvasVertices[1], canvasVertices[2]);
+
+	if (canvasVertices[1].y == canvasVertices[2].y) {
+		// For filling flat-bottom triangles, top to bottom and left to right, no need to divide into 2 triangles
+		// There is only a top vertex, left bottom vertex, and right bottom vertex
+		textureMapFlatBottomTriangle(window, canvasVertices, imagePixels);
+	}
+	else if (canvasVertices[0].y == canvasVertices[1].y) {
+		// For filling flat-top triangles, top to bottom and left to right, no need to divide into 2 triangles
+		// There is only a left top vertex, right top vertex, and bottom vertex 
+		textureMapFlatTopTriangle(window, canvasVertices, imagePixels);
+	}
+	else {
+		// For filling triangles that require a middle divide
+		CanvasPoint leftMiddlePoint = calculateExtraMiddlePoint(canvasVertices);
+
+		// Calculate associated texture point for the extra middle point
+		leftMiddlePoint.texturePoint = interpolateTexturePoint(canvasVertices[0], canvasVertices[2], leftMiddlePoint);
+
+		// Determine which middle point is left and which is right
+		CanvasPoint rightMiddlePoint = canvasVertices[1];
+		if (leftMiddlePoint.x > rightMiddlePoint.x) std::swap(leftMiddlePoint, rightMiddlePoint);
+
+		// Testing: draw middle line
+		drawLine(window, leftMiddlePoint, rightMiddlePoint, Colour(255, 255, 255));
+
+		// Fill top triangle, from top to bottom and left to right
+		CanvasTriangle dividedTopVertices(canvasVertices[0], leftMiddlePoint, rightMiddlePoint);
+		textureMapFlatBottomTriangle(window, dividedTopVertices, imagePixels);
+
+		// Fill bottom triangle, from top to bottom and left to right
+		CanvasTriangle dividedBottomVertices(leftMiddlePoint, rightMiddlePoint, canvasVertices[2]);
+		textureMapFlatTopTriangle(window, dividedBottomVertices, imagePixels);
+	}
+
+	// Draw a white stroked triangle over the top of the filled triangle
+	drawStrokedTriangle(window, canvasVertices, Colour(255, 255, 255));
+	
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
