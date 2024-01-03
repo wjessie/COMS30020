@@ -1,1 +1,1 @@
-# COMS30020
+# Computer Graphics Project
