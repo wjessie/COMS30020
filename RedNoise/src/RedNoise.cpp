@@ -132,7 +132,7 @@ void testDrawLine(DrawingWindow &window) {
 	CanvasPoint topRightCorner(window.width-1, 0);
 	CanvasPoint centre((window.width-1)/2, (window.height-1)/2);
 	CanvasPoint topCentre((window.width-1)/2, 0);
-	CanvasPoint bottomCentre((window.width-1)/2, window.height-1);
+	CanvasPoint bottomCentre((window.width-1)/2, (window.height-1));
 	CanvasPoint oneThirdLeft((window.width-1)/3, (window.height-1)/2);
 	CanvasPoint oneThirdRight(((window.width-1)/3)*2, (window.height-1)/2);
 	Colour WHITE(255, 255, 255);
@@ -491,14 +491,21 @@ std::vector<ModelTriangle> parseOBJFile(std::string fileName, float scalingFacto
 	return modelTriangles;
 }
 
+class Camera {
+public:
+    glm::vec3 position;
+    glm::mat3 orientation;
+};
+
 CanvasPoint getCanvasIntersectionPoint(glm::vec3 cameraPosition, glm::vec3 vertexPosition, float focalLength, DrawingWindow &window) {
 	// Transpose the vertex from the model coordinate system to the camera coordinate system
-	glm::vec3 transposedVertex = vertexPosition - cameraPosition;
+	// glm::vec3 transposedVertex = vertexPosition - cameraPosition;
+	glm::vec3 transposedVertex = vertexPosition;
 
 	// Calculate the vertex's position on the image plane (u, v)
-	float u = focalLength * (-1 * transposedVertex[0] * 180 / transposedVertex[2]) + (window.width / 2);
-	float v = focalLength * (transposedVertex[1] * 180 / transposedVertex[2]) + (window.height / 2);
-	CanvasPoint canvasIntersectionPoint(round(u), round(v), transposedVertex[2]);
+	float u = focalLength * (-1 * transposedVertex.x * 120 / transposedVertex.z) + (window.width / 2);
+	float v = focalLength * (transposedVertex.y * 120 / transposedVertex.z) + (window.height / 2);
+	CanvasPoint canvasIntersectionPoint(round(u), round(v), transposedVertex.z);
 	return canvasIntersectionPoint;
 }
 
@@ -552,6 +559,7 @@ void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour co
 		int x = round(from.x + (xStepSize * i));
 		int y = round(from.y + (yStepSize * i));
 		float z = from.depth + (zStepSize * i);
+		if (x < 0 || x >= window.width || y < 0 || y >= window.height) continue;
 		if (abs(1 / z) > depthBuffer[y][x]) {
 			depthBuffer[y][x] = abs(1 / z);
 			uint32_t lineColour = (255 << 24) + (int(colour.red) << 16) + (int(colour.green) << 8) + int(colour.blue);
@@ -655,10 +663,37 @@ void drawFilledTriangle(DrawingWindow &window, CanvasTriangle triangleVertices, 
 	drawStrokedTriangle(window, triangleVertices, colour, depthBuffer);
 }
 
-void drawRasterizedRender(DrawingWindow &window) {
+glm::vec3 translateCameraPosition(glm::vec3 cameraPosition, glm::vec3 translationMatrix) {
+	glm::vec3 translatedCameraPosition = cameraPosition + translationMatrix;
+	return translatedCameraPosition;
+}
+
+glm::vec3 rotateCameraPosition(glm::vec3 cameraPosition, glm::mat3 rotationMatrix) {
+	glm::vec3 rotatedCameraPosition = rotationMatrix * cameraPosition;
+	return rotatedCameraPosition;
+}
+
+void orbit(Camera &camera) {
+	float angleInDegrees = 5;
+	float angleInRadians = angleInDegrees * 3.14 / 180;
+	glm::vec3 column0(cos(angleInRadians), 0, sin(angleInRadians));
+	glm::vec3 column1(0, 1, 0);
+	glm::vec3 column2(-sin(angleInRadians), 0, cos(angleInRadians));
+	glm::mat3 rotationMatrix(column0, column1, column2);
+	camera.position = rotateCameraPosition(camera.position, rotationMatrix);
+}
+
+void lookAt(Camera &camera, glm::vec3 lookAtPoint) {
+	glm::vec3 forward = glm::normalize(camera.position - lookAtPoint);
+	glm::vec3 right = glm::normalize(glm::cross(glm::vec3(0, 1, 0), forward));
+	glm::vec3 up = glm::normalize(glm::cross(forward, right));
+	camera.orientation = glm::mat3(right, up, forward);
+}
+
+void drawRasterizedRender(DrawingWindow &window, Camera &camera) {
+	window.clearPixels();
 	float scalingFactor = 0.35;
 	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
-	glm::vec3 cameraPosition(0.0, 0.0, 4.0);
 	float focalLength = 2.0;
 
 	// Create depth buffer
@@ -668,8 +703,12 @@ void drawRasterizedRender(DrawingWindow &window) {
 		std::array<CanvasPoint, 3> vertices{};
 		// Loop through the vertices of the model triangles
 		for (size_t vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
+			// Apply camera orientation
+			glm::vec3 cameraToVertex = modelTriangles[i].vertices[vertexIndex] - camera.position;
+			glm::vec3 adjustedVector = cameraToVertex * camera.orientation;
+
 			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(
-				cameraPosition, modelTriangles[i].vertices[vertexIndex], focalLength, window);
+				camera.position, adjustedVector, focalLength, window);
 			vertices[vertexIndex] = canvasIntersectionPoint;
 		}
 
@@ -678,13 +717,104 @@ void drawRasterizedRender(DrawingWindow &window) {
 	}
 }
 
-void handleEvent(SDL_Event event, DrawingWindow &window) {
+void handleEvent(SDL_Event event, DrawingWindow &window, Camera &camera) {
 	if (event.type == SDL_KEYDOWN) {
-		if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_RIGHT) std::cout << "RIGHT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_UP) std::cout << "UP" << std::endl;
-		else if (event.key.keysym.sym == SDLK_DOWN) std::cout << "DOWN" << std::endl;
+		if (event.key.keysym.sym == SDLK_LEFT) {
+			// Translate the camera position to the left 0.1 unit (in x direction)
+			glm::vec3 translationMatrix(-0.1, 0.0, 0.0);
+			camera.position = translateCameraPosition(camera.position, translationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_RIGHT) {
+			// Translate the camera position to the right 0.1 unit (in x direction)
+			glm::vec3 translationMatrix(0.1, 0.0, 0.0);
+			camera.position = translateCameraPosition(camera.position, translationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_UP) {
+			// Translate the camera position up 0.1 unit (in y direction)
+			glm::vec3 translationMatrix(0.0, 0.1, 0.0);
+			camera.position = translateCameraPosition(camera.position, translationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_DOWN) {
+			// Translate the camera position down 0.1 unit (in y direction)
+			glm::vec3 translationMatrix(0.0, -0.1, 0.0);
+			camera.position = translateCameraPosition(camera.position, translationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_w) {
+			// Translate the camera position inwards 0.1 unit (in z direction)
+			glm::vec3 translationMatrix(0.0, 0.0, -0.1);
+			camera.position = translateCameraPosition(camera.position, translationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_s) {
+			// Translate the camera position outwards 0.1 unit (in z direction)
+			glm::vec3 translationMatrix(0.0, 0.0, 0.1);
+			camera.position = translateCameraPosition(camera.position, translationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_t) {
+			// Tilt the camera in the x-axis
+			float angleInDegrees = 1;
+			float angleInRadians = angleInDegrees * 3.14159 / 180;
+			glm::vec3 column0(1, 0, 0);
+			glm::vec3 column1(0, cos(angleInRadians), sin(angleInRadians));
+			glm::vec3 column2(0, -sin(angleInRadians), cos(angleInRadians));
+			glm::mat3 rotationMatrix(column0, column1, column2);
+			camera.orientation = rotationMatrix * camera.orientation;
+		}
+		else if (event.key.keysym.sym == SDLK_p) {
+			// Pan the camera in the y-axis
+			float angleInDegrees = 1;
+			float angleInRadians = angleInDegrees * 3.14 / 180;
+			glm::vec3 column0(cos(angleInRadians), 0, -sin(angleInRadians));
+			glm::vec3 column1(0, 1, 0);
+			glm::vec3 column2(sin(angleInRadians), 0, cos(angleInRadians));
+			glm::mat3 rotationMatrix(column0, column1, column2);
+			camera.orientation = rotationMatrix * camera.orientation;
+		}
+		else if (event.key.keysym.sym == SDLK_x) {
+			// Rotate the camera position 1 degree counterclockwise about the x-axis
+			float angleInDegrees = 1;
+			float angleInRadians = angleInDegrees * 3.14159 / 180;
+			glm::vec3 column0(1, 0, 0);
+			glm::vec3 column1(0, cos(angleInRadians), sin(angleInRadians));
+			glm::vec3 column2(0, -sin(angleInRadians), cos(angleInRadians));
+			glm::mat3 rotationMatrix(column0, column1, column2);
+			camera.position = rotateCameraPosition(camera.position, rotationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_c) {
+			// Rotate the camera position 1 degree clockwise about the x-axis
+			float angleInDegrees = 1;
+			float angleInRadians = angleInDegrees * 3.14159 / 180;
+			glm::vec3 column0(1, 0, 0);
+			glm::vec3 column1(0, cos(angleInRadians), -sin(angleInRadians));
+			glm::vec3 column2(0, sin(angleInRadians), cos(angleInRadians));
+			glm::mat3 rotationMatrix(column0, column1, column2);
+			camera.position = rotateCameraPosition(camera.position, rotationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_y) {
+			// Rotate the camera position 1 degree clockwise about the y-axis
+			float angleInDegrees = 1;
+			float angleInRadians = angleInDegrees * 3.14 / 180;
+			glm::vec3 column0(cos(angleInRadians), 0, -sin(angleInRadians));
+			glm::vec3 column1(0, 1, 0);
+			glm::vec3 column2(sin(angleInRadians), 0, cos(angleInRadians));
+			glm::mat3 rotationMatrix(column0, column1, column2);
+			camera.position = rotateCameraPosition(camera.position, rotationMatrix);
+		}
 		else if (event.key.keysym.sym == SDLK_u) {
+			// Rotate the camera position 1 degree clockwise about the y-axis
+			float angleInDegrees = 1;
+			float angleInRadians = angleInDegrees * 3.14 / 180;
+			glm::vec3 column0(cosf(angleInRadians), 0, sinf(angleInRadians));
+			glm::vec3 column1(0, 1, 0);
+			glm::vec3 column2(-sinf(angleInRadians), 0, cosf(angleInRadians));
+			glm::mat3 rotationMatrix(column0, column1, column2);
+			camera.position = rotateCameraPosition(camera.position, rotationMatrix);
+		}
+		else if (event.key.keysym.sym == SDLK_SPACE) {
+			// Orbit and LookAt implementation
+			orbit(camera);
+			lookAt(camera, glm::vec3(0, 0, 0));
+		}
+		else if (event.key.keysym.sym == SDLK_g) {
 			float red = rand() % 256;
 			float green = rand() % 256;
 			float blue = rand() % 256;
@@ -727,13 +857,17 @@ int main(int argc, char *argv[]) {
 
 	// drawPointcloudRender(window);
 	// drawWireframeRender(window);
-	drawRasterizedRender(window);
+
+	Camera camera;
+	camera.position = glm::vec3(0.0, 0.0, 4.0);
+	drawRasterizedRender(window, camera);
 
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
-		if (window.pollForInputEvents(event)) handleEvent(event, window);
+		if (window.pollForInputEvents(event)) handleEvent(event, window, camera);
 
 		// draw(window);
+		drawRasterizedRender(window, camera);
 
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 		window.renderFrame();
