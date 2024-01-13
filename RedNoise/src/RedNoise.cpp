@@ -123,7 +123,9 @@ void drawLine(DrawingWindow &window, CanvasPoint from, CanvasPoint to, Colour co
 		float x = round(from.x + (xStepSize * i));
 		float y = round(from.y + (yStepSize * i));
 		uint32_t lineColour = (255 << 24) + (int(colour.red) << 16) + (int(colour.green) << 8) + int(colour.blue);
-		window.setPixelColour(x, y, lineColour);
+		if (x >= 0 && x < window.width && y >= 0 && y < window.height) {
+			window.setPixelColour(x, y, lineColour);
+		}
 	}
 }
 
@@ -498,15 +500,20 @@ public:
     glm::mat3 orientation;
 };
 
-CanvasPoint getCanvasIntersectionPoint(glm::vec3 vertexPosition, float focalLength, DrawingWindow &window) {
+CanvasPoint getCanvasIntersectionPoint(Camera camera, glm::vec3 vertexPosition, float focalLength, DrawingWindow &window) {
+	// Transpose the vertex from the model coordinate system to the camera coordinate system
+	// Apply camera orientation
+	glm::vec3 cameraToVertex = vertexPosition - camera.position;
+	glm::vec3 adjustedVector = cameraToVertex * camera.orientation;
+
 	// Calculate the vertex's position on the image plane (u, v)
-	float u = focalLength * (-1 * vertexPosition.x * 120 / vertexPosition.z) + (window.width / 2);
-	float v = focalLength * (vertexPosition.y * 120 / vertexPosition.z) + (window.height / 2);
-	CanvasPoint canvasIntersectionPoint(round(u), round(v), vertexPosition.z);
+	float u = focalLength * (-1 * adjustedVector.x * 120 / adjustedVector.z) + (window.width / 2);
+	float v = focalLength * (adjustedVector.y * 120 / adjustedVector.z) + (window.height / 2);
+	CanvasPoint canvasIntersectionPoint(round(u), round(v), adjustedVector.z);
 	return canvasIntersectionPoint;
 }
 
-void drawPointcloudRender(DrawingWindow &window) {
+void drawPointcloudRender(DrawingWindow &window, Camera &camera) {
 	float scalingFactor = 0.35;
 	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
 	glm::vec3 cameraPosition(0.0, 0.0, 4.0);
@@ -517,28 +524,25 @@ void drawPointcloudRender(DrawingWindow &window) {
 		// Loop through the vertices of the model triangles
 		for (size_t vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
 			glm::vec3 vertexPosition = modelTriangles[i].vertices[vertexIndex];
-			// Transpose the vertex from the model coordinate system to the camera coordinate system
-			glm::vec3 transposedVertex = vertexPosition - cameraPosition;
-			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(transposedVertex, focalLength, window);
+			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(camera, vertexPosition, focalLength, window);
 			window.setPixelColour(canvasIntersectionPoint.x, canvasIntersectionPoint.y, white);
 		}
 	}
 }
 
-void drawWireframeRender(DrawingWindow &window) {
+void drawWireframeRender(DrawingWindow &window, Camera camera) {
+	window.clearPixels();
 	float scalingFactor = 0.35;
 	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
-	glm::vec3 cameraPosition(0.0, 0.0, 4.0);
 	float focalLength = 2.0;
 	Colour WHITE(255, 255, 255);
+
 	for (size_t i = 0; i < modelTriangles.size(); i++) {
 		std::array<CanvasPoint, 3> vertices{};
 		// Loop through the vertices of the model triangles
 		for (size_t vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
 			glm::vec3 vertexPosition = modelTriangles[i].vertices[vertexIndex];
-			// Transpose the vertex from the model coordinate system to the camera coordinate system
-			glm::vec3 transposedVertex = vertexPosition - cameraPosition;
-			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(transposedVertex, focalLength, window);
+			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(camera, vertexPosition, focalLength, window);
 			vertices[vertexIndex] = canvasIntersectionPoint;
 		}
 
@@ -704,12 +708,9 @@ void drawRasterizedScene(DrawingWindow &window, Camera &camera) {
 		std::array<CanvasPoint, 3> vertices{};
 		// Loop through the vertices of the model triangles
 		for (size_t vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
-			// Apply camera orientation
-			glm::vec3 cameraToVertex = modelTriangles[i].vertices[vertexIndex] - camera.position;
-			glm::vec3 adjustedVector = cameraToVertex * camera.orientation;
-
 			// Find the intersection point on the image plane
-			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(adjustedVector, focalLength, window);
+			glm::vec3 vertexPosition = modelTriangles[i].vertices[vertexIndex];
+			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(camera, vertexPosition, focalLength, window);
 			vertices[vertexIndex] = canvasIntersectionPoint;
 		}
 
@@ -749,9 +750,9 @@ RayTriangleIntersection getClosestValidIntersection(glm::vec3 rayOrigin, glm::ve
 				possibleSolution[1] * (triangle.vertices[1] - triangle.vertices[0])) + (
 					possibleSolution[2] * (triangle.vertices[2] - triangle.vertices[0]));
 			
-			glm::vec3 roundedIntersectionPoint = roundVec3(intersectionPoint, 3);
+			// Round to clear shadow acne
 			glm::vec3 roundedRayOrigin = roundVec3(rayOrigin, 3);
-
+			glm::vec3 roundedIntersectionPoint = roundVec3(intersectionPoint, 3);
 			if (roundedIntersectionPoint != roundedRayOrigin) {
 				float distanceFromCamera = possibleSolution[0];
 				ModelTriangle intersectedTriangle = triangle;
@@ -764,50 +765,15 @@ RayTriangleIntersection getClosestValidIntersection(glm::vec3 rayOrigin, glm::ve
 	return rayTriangleIntersection;
 }
 
-RayTriangleIntersection getClosestValidIntersection(glm::vec3 rayOrigin, glm::vec3 rayDirection, std::vector<ModelTriangle> modelTriangles, int index) {
-	RayTriangleIntersection rayTriangleIntersection;
-	rayTriangleIntersection.distanceFromCamera = FLT_MAX;
-
-	for (size_t i = 0; i < modelTriangles.size(); i++) {
-		ModelTriangle triangle = modelTriangles[i];
-		glm::vec3 e0 = triangle.vertices[1] - triangle.vertices[0];
-		glm::vec3 e1 = triangle.vertices[2] - triangle.vertices[0];
-		glm::vec3 SPVector = rayOrigin - triangle.vertices[0];
-		glm::mat3 DEMatrix(-rayDirection, e0, e1);
-		glm::vec3 possibleSolution = glm::inverse(DEMatrix) * SPVector;
-
-		// Validation checks
-		if((possibleSolution[0] < rayTriangleIntersection.distanceFromCamera) && (possibleSolution[0] >= 0) &&
-			(possibleSolution[1] >= 0.0) && (possibleSolution[1] <= 1.0) && 
-			(possibleSolution[2] >= 0.0) && (possibleSolution[2] <= 1.0) && ((possibleSolution[1] + possibleSolution[2]) <= 1.0)) {
-			// Formula for position on triangular surface in 3D space: r = p_0 + u(p_1 - p_0) + v(p_2 - p_0)
-			// Intersection point relative to the world origin
-			glm::vec3 intersectionPoint = triangle.vertices[0] + (
-				possibleSolution[1] * (triangle.vertices[1] - triangle.vertices[0])) + (
-					possibleSolution[2] * (triangle.vertices[2] - triangle.vertices[0]));
-			
-			glm::vec3 roundedIntersectionPoint = roundVec3(intersectionPoint, 3);
-			glm::vec3 roundedRayOrigin = roundVec3(rayOrigin, 3);
-
-			if (roundedIntersectionPoint != roundedRayOrigin) {
-				float distanceFromCamera = possibleSolution[0];
-				ModelTriangle intersectedTriangle = triangle;
-				size_t triangleIndex = i;
-				rayTriangleIntersection = RayTriangleIntersection(intersectionPoint, distanceFromCamera, intersectedTriangle, triangleIndex);
-			}
-		}
-	}
-
-	return rayTriangleIntersection;
-}
-
-glm::vec3 convert2DCanvasToDirectionVector(CanvasPoint canvasPoint, glm::vec3 cameraPosition, float focalLength, DrawingWindow &window) {
+glm::vec3 convert2DCanvasToDirectionVector(CanvasPoint canvasPoint, glm::mat3 cameraOrientation, float focalLength, DrawingWindow &window) {
 	// Based on getClosestValidIntersection function
 	float u = canvasPoint.x;
 	float v = canvasPoint.y;
 	float x = ((u - (window.width / 2)) / focalLength / 60);
 	float y = ((v - (window.height / 2)) / focalLength / -60);
-	return glm::vec3(x, y, focalLength);
+	glm::vec3 adjustedDirectionVector(x, y, focalLength);
+	adjustedDirectionVector = adjustedDirectionVector * glm::inverse(cameraOrientation);
+	return adjustedDirectionVector;
 }
 
 void drawRayTracing(DrawingWindow &window, Camera &camera) {
@@ -820,7 +786,7 @@ void drawRayTracing(DrawingWindow &window, Camera &camera) {
 	for (size_t y = 0; y < window.height; y++) {
 		for (size_t x = 0; x < window.width; x++) {
 			CanvasPoint point(x, y, focalLength);
-			glm::vec3 convertedDirectionVector = convert2DCanvasToDirectionVector(point, camera.position, focalLength, window);
+			glm::vec3 convertedDirectionVector = convert2DCanvasToDirectionVector(point, camera.orientation, focalLength, window);
 			glm::vec3 rayDirection = glm::normalize(convertedDirectionVector - camera.position);
 			RayTriangleIntersection rayTriangleIntersection = getClosestValidIntersection(camera.position, rayDirection, modelTriangles);
 			// Check that there is a valid intersection found
@@ -830,8 +796,7 @@ void drawRayTracing(DrawingWindow &window, Camera &camera) {
 				RayTriangleIntersection shadowRayIntersection = getClosestValidIntersection(shadowRayOrigin, shadowRayDirection, modelTriangles);
 
 				if (shadowRayIntersection.triangleIndex == 0 || shadowRayIntersection.triangleIndex == 1 || 
-					shadowRayIntersection.triangleIndex == rayTriangleIntersection.triangleIndex ||
-					glm::distance(shadowRayIntersection.intersectionPoint, rayTriangleIntersection.intersectionPoint) < .0005) {
+					shadowRayIntersection.triangleIndex == rayTriangleIntersection.triangleIndex) {
 					Colour colour = rayTriangleIntersection.intersectedTriangle.colour;
 					uint32_t pixelColour = (255 << 24) + (int(colour.red) << 16) + (int(colour.green) << 8) + int(colour.blue);
 					window.setPixelColour(x, y, pixelColour);
@@ -961,7 +926,7 @@ void handleEvent(SDL_Event event, DrawingWindow &window, Camera &camera) {
 			drawFilledTriangle(window, randTriangle, randColour);
 		}
 		else if (event.key.keysym.sym == SDLK_1) {
-			drawWireframeRender(window);
+			drawWireframeRender(window, camera);
 		}
 		else if (event.key.keysym.sym == SDLK_2) {
 			drawRasterizedScene(window, camera);
@@ -988,21 +953,22 @@ int main(int argc, char *argv[]) {
 
 	// testTextureMapping(window);
 
-	// drawPointcloudRender(window);
-	// drawWireframeRender(window);
-
 	Camera camera;
 	camera.position = glm::vec3(0.0, 0.0, 4.0);
 
+	// drawPointcloudRender(window);
+	// drawWireframeRender(window, camera);
 	// drawRasterizedScene(window, camera);
-	// drawRayTracing(window, camera);
+	drawRayTracing(window, camera);
 
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
 		if (window.pollForInputEvents(event)) handleEvent(event, window, camera);
 
 		// draw(window);
+		// drawWireframeRender(window, camera);
 		// drawRasterizedScene(window, camera);
+		drawRayTracing(window, camera);
 
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 		window.renderFrame();
