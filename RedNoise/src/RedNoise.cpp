@@ -11,6 +11,7 @@
 #include <TexturePoint.h>
 #include <ModelTriangle.h>
 #include <RayTriangleIntersection.h>
+#include <glm/gtx/string_cast.hpp>
 
 #define WIDTH 320
 #define HEIGHT 240
@@ -453,7 +454,6 @@ std::unordered_map<std::string, Colour> parseMTLFile(std::string fileName) {
 	}
 
 	mtlFile.close();
-
 	return colourPalette;
 }
 
@@ -464,6 +464,11 @@ std::vector<ModelTriangle> parseOBJFile(std::string fileName, float scalingFacto
 	std::vector<ModelTriangle> modelTriangles;
 	std::unordered_map<std::string, Colour> colourPalette;
 	Colour colour;
+	std::vector<std::vector<float>> triangleVertexIndices;
+
+	if (fileName == "sphere.obj") {
+		colour = Colour(255, 0, 0);
+	}
 
 	while(std::getline(objFile, fileLine)) {
 		std::vector<std::string> fileLineVector = split(fileLine, ' ');
@@ -482,12 +487,41 @@ std::vector<ModelTriangle> parseOBJFile(std::string fileName, float scalingFacto
 			vertices.push_back(vertex);
 		}
 		else if (fileLineVector[0] == "f") {
-			glm::vec3 vertex0 = vertices[std::stof(fileLineVector[1]) - 1];
-			glm::vec3 vertex1 = vertices[std::stof(fileLineVector[2]) - 1];
-			glm::vec3 vertex2 = vertices[std::stof(fileLineVector[3]) - 1];
+			float index0 = std::stof(fileLineVector[1]) - 1;
+			float index1 = std::stof(fileLineVector[2]) - 1;
+			float index2 = std::stof(fileLineVector[3]) - 1;
+			glm::vec3 vertex0 = vertices[index0];
+			glm::vec3 vertex1 = vertices[index1];
+			glm::vec3 vertex2 = vertices[index2];
 			ModelTriangle modelTriangle(vertex0, vertex1, vertex2, colour);
+			modelTriangle.normal = glm::cross((vertex1 - vertex0), (vertex2 - vertex0));
 			modelTriangles.push_back(modelTriangle);
+			std::vector<float> indices = {index0, index1, index2};
+			triangleVertexIndices.push_back(indices);
 		}
+	}
+
+	std::vector<glm::vec3> vertexNormals(vertices.size(), glm::vec3(0, 0, 0));
+	for (size_t i = 0; i < vertices.size(); i++) {
+		float faceNormalCount = 0;
+		for (size_t j = 0; j < triangleVertexIndices.size(); j++) {
+			for (int k = 0; k < 3; k++) {
+				if(triangleVertexIndices[j][k] == i) {
+					vertexNormals[i] = vertexNormals[i] + modelTriangles[j].normal;
+					faceNormalCount++;
+				}
+			}
+		}
+		if (faceNormalCount > 0) {
+			vertexNormals[i] = vertexNormals[i] / faceNormalCount;
+		}
+	}
+
+	for (size_t i = 0; i < modelTriangles.size(); i++) {
+		glm::vec3 vertexNormal0 = vertexNormals[triangleVertexIndices[i][0]];
+		glm::vec3 vertexNormal1 = vertexNormals[triangleVertexIndices[i][1]];
+		glm::vec3 vertexNormal2 = vertexNormals[triangleVertexIndices[i][2]];
+		modelTriangles[i].vertexNormals = {vertexNormal0, vertexNormal1, vertexNormal2};
 	}
 
 	objFile.close();
@@ -513,27 +547,21 @@ CanvasPoint getCanvasIntersectionPoint(Camera camera, glm::vec3 vertexPosition, 
 	return canvasIntersectionPoint;
 }
 
-void drawPointcloudRender(DrawingWindow &window, Camera &camera) {
-	float scalingFactor = 0.35;
-	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
-	glm::vec3 cameraPosition(0.0, 0.0, 4.0);
+void drawPointcloudRender(DrawingWindow &window, Camera &camera, std::vector<ModelTriangle> modelTriangles) {
 	float focalLength = 2.0;
-	uint32_t white = (255 << 24) + (255 << 16) + (255 << 8) + 255;
+	uint32_t WHITE = (255 << 24) + (255 << 16) + (255 << 8) + 255;
 
 	for (size_t i = 0; i < modelTriangles.size(); i++) {
 		// Loop through the vertices of the model triangles
 		for (size_t vertexIndex = 0; vertexIndex < 3; vertexIndex++) {
 			glm::vec3 vertexPosition = modelTriangles[i].vertices[vertexIndex];
 			CanvasPoint canvasIntersectionPoint = getCanvasIntersectionPoint(camera, vertexPosition, focalLength, window);
-			window.setPixelColour(canvasIntersectionPoint.x, canvasIntersectionPoint.y, white);
+			window.setPixelColour(canvasIntersectionPoint.x, canvasIntersectionPoint.y, WHITE);
 		}
 	}
 }
 
-void drawWireframeRender(DrawingWindow &window, Camera camera) {
-	window.clearPixels();
-	float scalingFactor = 0.35;
-	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
+void drawWireframeRender(DrawingWindow &window, Camera camera, std::vector<ModelTriangle> modelTriangles) {
 	float focalLength = 2.0;
 	Colour WHITE(255, 255, 255);
 
@@ -695,10 +723,8 @@ void lookAt(Camera &camera, glm::vec3 lookAtPoint) {
 	camera.orientation = glm::mat3(right, up, forward);
 }
 
-void drawRasterizedScene(DrawingWindow &window, Camera &camera) {
+void drawRasterizedScene(DrawingWindow &window, Camera &camera, std::vector<ModelTriangle> modelTriangles) {
 	window.clearPixels();
-	float scalingFactor = 0.35;
-	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
 	float focalLength = 2.0;
 
 	// Create depth buffer
@@ -746,6 +772,8 @@ RayTriangleIntersection getClosestValidIntersection(glm::vec3 rayOrigin, glm::ve
 			(possibleSolution[2] >= 0.0) && (possibleSolution[2] <= 1.0) && ((possibleSolution[1] + possibleSolution[2]) <= 1.0)) {
 			// Formula for position on triangular surface in 3D space: r = p_0 + u(p_1 - p_0) + v(p_2 - p_0)
 			// Intersection point relative to the world origin
+			float u = possibleSolution[1];
+			float v = possibleSolution[2];
 			glm::vec3 intersectionPoint = triangle.vertices[0] + (
 				possibleSolution[1] * (triangle.vertices[1] - triangle.vertices[0])) + (
 					possibleSolution[2] * (triangle.vertices[2] - triangle.vertices[0]));
@@ -758,6 +786,8 @@ RayTriangleIntersection getClosestValidIntersection(glm::vec3 rayOrigin, glm::ve
 				ModelTriangle intersectedTriangle = triangle;
 				size_t triangleIndex = i;
 				rayTriangleIntersection = RayTriangleIntersection(intersectionPoint, distanceFromCamera, intersectedTriangle, triangleIndex);
+				rayTriangleIntersection.u = u;
+				rayTriangleIntersection.v = v;
 			}
 		}
 	}
@@ -776,12 +806,62 @@ glm::vec3 convert2DCanvasToDirectionVector(CanvasPoint canvasPoint, glm::mat3 ca
 	return adjustedDirectionVector;
 }
 
-void drawRayTracing(DrawingWindow &window, Camera &camera) {
+void drawRayTracing(DrawingWindow &window, Camera &camera, std::vector<ModelTriangle> modelTriangles, glm::vec3 &lightPosition) {
 	window.clearPixels();
-	float scalingFactor = 0.35;
-	std::vector<ModelTriangle> modelTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
 	float focalLength = 2.0;
-	glm::vec3 lightPosition = (modelTriangles[0].vertices[0] + modelTriangles[0].vertices[1]) / 2.0f;
+
+	for (size_t y = 0; y < window.height; y++) {
+		for (size_t x = 0; x < window.width; x++) {
+			CanvasPoint point(x, y, focalLength);
+			glm::vec3 convertedDirectionVector = convert2DCanvasToDirectionVector(point, camera.orientation, focalLength, window);
+			glm::vec3 rayDirection = glm::normalize(convertedDirectionVector - camera.position);
+			RayTriangleIntersection rayTriangleIntersection = getClosestValidIntersection(camera.position, rayDirection, modelTriangles);
+			// Check that there is a valid intersection found
+			if (rayTriangleIntersection.distanceFromCamera != FLT_MAX) {
+				Colour colour = rayTriangleIntersection.intersectedTriangle.colour;
+
+				// Diffuse lighting
+				glm::vec3 surfacePoint = rayTriangleIntersection.intersectionPoint;
+				float radius = glm::length(lightPosition - surfacePoint);
+				float s = 20; // Strength of the light source
+				float proximityLighting = s / (4 * 3.14 * (radius * radius));
+				if (proximityLighting < 0) proximityLighting = 0; // total darkness
+				if (proximityLighting > 1) proximityLighting = 1; // fully illuminated
+				glm::vec3 surfaceToLight = glm::normalize(lightPosition - surfacePoint);
+				glm::vec3 surfaceNormal = glm::normalize(rayTriangleIntersection.intersectedTriangle.normal);
+				float angleOfIncidence = glm::dot(surfaceNormal, surfaceToLight);
+				if (angleOfIncidence < 0) angleOfIncidence = 0;
+				if (angleOfIncidence > 1) angleOfIncidence = 1;
+
+				// Specular lighting
+				glm::vec3 lightToSurface = glm::normalize(surfacePoint - lightPosition); // vector of incidence
+				glm::vec3 reflectionVector = glm::normalize(
+					lightToSurface - (2.0f * surfaceNormal) * glm::dot(lightToSurface, surfaceNormal));
+				glm::vec3 viewVector = glm::normalize(camera.position - surfacePoint); // vector from surface to camera
+				float angleReflectionAndView = glm::dot(reflectionVector, viewVector);
+				if (angleReflectionAndView < 0) angleReflectionAndView = 0;
+				if (angleReflectionAndView > 1) angleReflectionAndView = 1;
+				float specularExponent = 256;
+
+				// With specular lighting:
+				float brightness = (proximityLighting + angleOfIncidence + powf(angleReflectionAndView, specularExponent)) / 3;
+				// float brightness = (proximityLighting + angleOfIncidence) / 2; // without specular lighting
+				if (brightness < 0.2) brightness = 0.2; // Ambient lighting
+
+				float red = colour.red * brightness;
+				float green = colour.green * brightness;
+				float blue = colour.blue * brightness;
+				uint32_t pixelColour = (255 << 24) + (int(red) << 16) + (int(green) << 8) + int(blue);
+				window.setPixelColour(x, y, pixelColour);
+			}
+		}
+	}
+}
+
+void drawShadowRayTracing(DrawingWindow &window, Camera &camera, std::vector<ModelTriangle> modelTriangles, glm::vec3 &lightPosition) {
+	window.clearPixels();
+	float focalLength = 2.0;
+	glm::vec3 roundedLightPosition = roundVec3(lightPosition, 3);
 
 	for (size_t y = 0; y < window.height; y++) {
 		for (size_t x = 0; x < window.width; x++) {
@@ -794,11 +874,55 @@ void drawRayTracing(DrawingWindow &window, Camera &camera) {
 				glm::vec3 shadowRayOrigin = rayTriangleIntersection.intersectionPoint;
 				glm::vec3 shadowRayDirection = glm::normalize(lightPosition - shadowRayOrigin);
 				RayTriangleIntersection shadowRayIntersection = getClosestValidIntersection(shadowRayOrigin, shadowRayDirection, modelTriangles);
+				glm::vec3 roundedShadowRayIntersection = roundVec3(shadowRayIntersection.intersectionPoint, 3);
+				Colour colour = rayTriangleIntersection.intersectedTriangle.colour;
 
-				if (shadowRayIntersection.triangleIndex == 0 || shadowRayIntersection.triangleIndex == 1 || 
-					shadowRayIntersection.triangleIndex == rayTriangleIntersection.triangleIndex) {
-					Colour colour = rayTriangleIntersection.intersectedTriangle.colour;
-					uint32_t pixelColour = (255 << 24) + (int(colour.red) << 16) + (int(colour.green) << 8) + int(colour.blue);
+				// Validate intersections between the surface and light for casting shadows and addressing shadow acne
+				// Triangle indices 0 and 1 are the two white triangles for the light position in the Cornell Box
+				if (roundedLightPosition == roundedShadowRayIntersection ||
+					shadowRayIntersection.triangleIndex == 0 || shadowRayIntersection.triangleIndex == 1 ||
+					shadowRayIntersection.triangleIndex == rayTriangleIntersection.triangleIndex ||
+					rayTriangleIntersection.triangleIndex == 0 || rayTriangleIntersection.triangleIndex == 1) {
+
+					// Diffuse lighting
+					glm::vec3 surfacePoint = rayTriangleIntersection.intersectionPoint;
+					float radius = glm::length(lightPosition - surfacePoint);
+					float s = 8; // Strength of the light source
+					float proximityLighting = s / (4 * 3.14 * (radius * radius));
+					if (proximityLighting < 0) proximityLighting = 0; // total darkness
+					if (proximityLighting > 1) proximityLighting = 1; // fully illuminated
+					glm::vec3 surfaceToLight = glm::normalize(lightPosition - surfacePoint);
+					glm::vec3 surfaceNormal = glm::normalize(rayTriangleIntersection.intersectedTriangle.normal);
+					float angleOfIncidence = glm::dot(surfaceNormal, surfaceToLight);
+					if (angleOfIncidence < 0) angleOfIncidence = 0;
+					if (angleOfIncidence > 1) angleOfIncidence = 1;
+
+					// Specular lighting
+					glm::vec3 lightToSurface = glm::normalize(surfacePoint - lightPosition); // vector of incidence
+					glm::vec3 reflectionVector = glm::normalize(
+						lightToSurface - (2.0f * surfaceNormal) * glm::dot(lightToSurface, surfaceNormal));
+					glm::vec3 viewVector = glm::normalize(camera.position - surfacePoint); // vector from surface to camera
+					float angleReflectionAndView = glm::dot(reflectionVector, viewVector);
+					if (angleReflectionAndView < 0) angleReflectionAndView = 0;
+					if (angleReflectionAndView > 1) angleReflectionAndView = 1;
+					float specularExponent = 256;
+
+					// With specular lighting:
+					// float brightness = (proximityLighting + angleOfIncidence + powf(angleReflectionAndView, specularExponent)) / 3;
+					float brightness = (proximityLighting + angleOfIncidence) / 2; // without specular lighting
+					if (brightness < 0.2) brightness = 0.2; // Ambient lighting
+
+					float red = colour.red * brightness;
+					float green = colour.green * brightness;
+					float blue = colour.blue * brightness;
+					uint32_t pixelColour = (255 << 24) + (int(red) << 16) + (int(green) << 8) + int(blue);
+					window.setPixelColour(x, y, pixelColour);
+				}
+				else {
+					// Ambient lighting for the shadows (minimum threshold for all surfaces)
+					float brightness = 0.2;
+					uint32_t pixelColour = (255 << 24) + (
+						int(colour.red * brightness) << 16) + (int(colour.green * brightness) << 8) + int(colour.blue * brightness);
 					window.setPixelColour(x, y, pixelColour);
 				}
 			}
@@ -806,37 +930,105 @@ void drawRayTracing(DrawingWindow &window, Camera &camera) {
 	}
 }
 
-void handleEvent(SDL_Event event, DrawingWindow &window, Camera &camera) {
+void drawGouraudShading(DrawingWindow &window, Camera &camera, std::vector<ModelTriangle> modelTriangles, glm::vec3 &lightPosition) {
+	window.clearPixels();
+	float focalLength = 2.0;
+
+	for (size_t y = 0; y < window.height; y++) {
+		for (size_t x = 0; x < window.width; x++) {
+			CanvasPoint point(x, y, focalLength);
+			glm::vec3 convertedDirectionVector = convert2DCanvasToDirectionVector(point, camera.orientation, focalLength, window);
+			glm::vec3 rayDirection = glm::normalize(convertedDirectionVector - camera.position);
+			RayTriangleIntersection rayTriangleIntersection = getClosestValidIntersection(camera.position, rayDirection, modelTriangles);
+			// Check that there is a valid intersection found
+			if (rayTriangleIntersection.distanceFromCamera != FLT_MAX) {
+				ModelTriangle triangle = rayTriangleIntersection.intersectedTriangle;
+				Colour colour = triangle.colour;
+				float brightnessArray[3]; // u2, v1, w0
+
+				for (int i = 0; i < 3; i++) {
+					glm::vec3 point = triangle.vertices[i];
+					float radius = glm::length(lightPosition - point);
+					float s = 20; // Strength of the light source
+					float proximityLighting = s / (4 * 3.14 * (radius * radius));
+					if (proximityLighting < 0) proximityLighting = 0; // total darkness
+					if (proximityLighting > 1) proximityLighting = 1; // fully illuminated
+					glm::vec3 surfaceToLight = glm::normalize(lightPosition - point);
+					glm::vec3 surfaceNormal = glm::normalize(triangle.vertexNormals[i]);
+					float angleOfIncidence = glm::dot(surfaceNormal, surfaceToLight);
+					if (angleOfIncidence < 0) angleOfIncidence = 0;
+					if (angleOfIncidence > 1) angleOfIncidence = 1;
+
+					glm::vec3 lightToSurface = glm::normalize(point - lightPosition); // vector of incidence
+					glm::vec3 reflectionVector = glm::normalize(
+						lightToSurface - (2.0f * surfaceNormal) * glm::dot(lightToSurface, surfaceNormal));
+					glm::vec3 viewVector = glm::normalize(camera.position - point); // vector from surface to camera
+					float angleReflectionAndView = glm::dot(reflectionVector, viewVector);
+					if (angleReflectionAndView < 0) angleReflectionAndView = 0;
+					if (angleReflectionAndView > 1) angleReflectionAndView = 1;
+					float specularExponent = 256;
+
+					float brightness = (angleOfIncidence + powf(angleReflectionAndView, specularExponent)) / 2;
+					if (brightness < 0.2) brightness = 0.2; // Ambient lighting
+					brightnessArray[i] = brightness;
+				}
+
+				float u = rayTriangleIntersection.u;
+				float v = rayTriangleIntersection.v;
+				float w = 1.0 - (u + v);
+
+				float u2Brightness = v * brightnessArray[2];
+				float v1Brightness = u * brightnessArray[1];
+				float w0Brightness = w * brightnessArray[0];
+				float weightedAverageBrightness = u2Brightness + v1Brightness + w0Brightness;
+
+				float red = colour.red * weightedAverageBrightness;
+				float green = colour.green * weightedAverageBrightness;
+				float blue = colour.blue * weightedAverageBrightness;
+				uint32_t pixelColour = (255 << 24) + (int(red) << 16) + (int(green) << 8) + int(blue);
+				window.setPixelColour(x, y, pixelColour);
+			}
+		}
+	}
+}
+
+void handleEvent(SDL_Event event, DrawingWindow &window, Camera &camera, std::vector<ModelTriangle> triangles, glm::vec3 &lightPosition) {
 	if (event.type == SDL_KEYDOWN) {
 		if (event.key.keysym.sym == SDLK_LEFT) {
 			// Translate the camera position to the left 0.1 unit (in x direction)
 			glm::vec3 translationMatrix(-0.1, 0.0, 0.0);
 			camera.position = translateCameraPosition(camera.position, translationMatrix);
+			std::cout << "camera position: " << glm::to_string(camera.position) << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_RIGHT) {
 			// Translate the camera position to the right 0.1 unit (in x direction)
 			glm::vec3 translationMatrix(0.1, 0.0, 0.0);
 			camera.position = translateCameraPosition(camera.position, translationMatrix);
+			std::cout << "camera position: " << glm::to_string(camera.position) << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_UP) {
 			// Translate the camera position up 0.1 unit (in y direction)
 			glm::vec3 translationMatrix(0.0, 0.1, 0.0);
 			camera.position = translateCameraPosition(camera.position, translationMatrix);
+			std::cout << "camera position: " << glm::to_string(camera.position) << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_DOWN) {
 			// Translate the camera position down 0.1 unit (in y direction)
 			glm::vec3 translationMatrix(0.0, -0.1, 0.0);
 			camera.position = translateCameraPosition(camera.position, translationMatrix);
+			std::cout << "camera position: " << glm::to_string(camera.position) << std::endl;
 		}
-		else if (event.key.keysym.sym == SDLK_w) {
+		else if (event.key.keysym.sym == SDLK_RETURN) {
 			// Translate the camera position inwards 0.1 unit (in z direction)
 			glm::vec3 translationMatrix(0.0, 0.0, -0.1);
 			camera.position = translateCameraPosition(camera.position, translationMatrix);
+			std::cout << "camera position: " << glm::to_string(camera.position) << std::endl;
 		}
-		else if (event.key.keysym.sym == SDLK_s) {
+		else if (event.key.keysym.sym == SDLK_RSHIFT) {
 			// Translate the camera position outwards 0.1 unit (in z direction)
 			glm::vec3 translationMatrix(0.0, 0.0, 0.1);
 			camera.position = translateCameraPosition(camera.position, translationMatrix);
+			std::cout << "camera position: " << glm::to_string(camera.position) << std::endl;
 		}
 		else if (event.key.keysym.sym == SDLK_t) {
 			// Tilt the camera in the x-axis
@@ -926,13 +1118,37 @@ void handleEvent(SDL_Event event, DrawingWindow &window, Camera &camera) {
 			drawFilledTriangle(window, randTriangle, randColour);
 		}
 		else if (event.key.keysym.sym == SDLK_1) {
-			drawWireframeRender(window, camera);
+			drawWireframeRender(window, camera, triangles);
 		}
 		else if (event.key.keysym.sym == SDLK_2) {
-			drawRasterizedScene(window, camera);
+			drawRasterizedScene(window, camera, triangles);
 		}
 		else if (event.key.keysym.sym == SDLK_3) {
-			drawRayTracing(window, camera);
+			drawRayTracing(window, camera, triangles, lightPosition);
+		}
+		else if (event.key.keysym.sym == SDLK_a) {
+			lightPosition.x -= .10;
+			std::cout << "light position: " << glm::to_string(lightPosition) << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_d) {
+			lightPosition.x += .10;
+			std::cout << "light position: " << glm::to_string(lightPosition) << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_s) {
+			lightPosition.y -= .10;
+			std::cout << "light position: " << glm::to_string(lightPosition) << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_w) {
+			lightPosition.y += .10;
+			std::cout << "light position: " << glm::to_string(lightPosition) << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_q) {
+			lightPosition.z -= .10;
+			std::cout << "light position: " << glm::to_string(lightPosition) << std::endl;
+		}
+		else if (event.key.keysym.sym == SDLK_e) {
+			lightPosition.z += .10;
+			std::cout << "light position: " << glm::to_string(lightPosition) << std::endl;
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
@@ -948,27 +1164,41 @@ int main(int argc, char *argv[]) {
 
 	// drawGreyscale(window);
 	// drawTwoDimensionalColour(window);
-
 	// testDrawLine(window);
-
 	// testTextureMapping(window);
 
 	Camera camera;
 	camera.position = glm::vec3(0.0, 0.0, 4.0);
+	float scalingFactor = 0.35;
+	std::vector<ModelTriangle> cornellBoxTriangles = parseOBJFile("cornell-box.obj", scalingFactor);
 
-	// drawPointcloudRender(window);
-	// drawWireframeRender(window, camera);
-	// drawRasterizedScene(window, camera);
-	drawRayTracing(window, camera);
+	// drawPointcloudRender(window, camera, cornellBoxTriangles);
+	// drawWireframeRender(window, camera, cornellBoxTriangles);
+	// drawRasterizedScene(window, camera, cornellBoxTriangles);
+
+	// midpoint of the two white triangles: (cornellBoxTriangles[0].vertices[0] + cornellBoxTriangles[0].vertices[1]) / 2.0f
+	// light position similar to workbook image: (0.0, 1.0, 0.5)
+	// glm::vec3 lightPosition(0.000346, 0.958600, 0.002461);
+	// drawRayTracing(window, camera, cornellBoxTriangles, lightPosition);
+
+	camera.position = glm::vec3(0.0, 2.1, -2.5);
+	std::vector<ModelTriangle> sphereTriangles = parseOBJFile("sphere.obj", 0.5);
+	// glm::vec3 lightPosition(0.300346, 1.258600, -0.302461);
+	glm::vec3 lightPosition(0.700346, 1.558600, -0.302461);
+	// drawRayTracing(window, camera, sphereTriangles, lightPosition);
+	drawGouraudShading(window, camera, sphereTriangles, lightPosition);
 
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
-		if (window.pollForInputEvents(event)) handleEvent(event, window, camera);
+		if (window.pollForInputEvents(event)) handleEvent(event, window, camera, cornellBoxTriangles, lightPosition);
 
 		// draw(window);
-		// drawWireframeRender(window, camera);
-		// drawRasterizedScene(window, camera);
-		drawRayTracing(window, camera);
+		// drawWireframeRender(window, camera, cornellBoxTriangles);
+		// drawRasterizedScene(window, camera, cornellBoxTriangles);
+		// drawRayTracing(window, camera, cornellBoxTriangles, lightPosition);
+
+		// drawRayTracing(window, camera, sphereTriangles, lightPosition);
+		drawGouraudShading(window, camera, sphereTriangles, lightPosition);
 
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 		window.renderFrame();
